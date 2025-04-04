@@ -2,35 +2,28 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/Masterminds/semver/v3"
-	"github.com/go-resty/resty/v2"
 	"log/slog"
 	"os"
 	"pipe-cli/internal/config"
+	"pipe-cli/internal/jira_wick"
+
+	"github.com/Masterminds/semver/v3"
 )
 
 // CloseJiraReleaseVersionJob — структура, реализующая джоб закрытия закрытие релиза в жире
 type CloseJiraReleaseVersionJob struct {
-	ciVars    *config.GitlabCIVariables
-	jobConfig *config.JobConfig
+	ciVars     *config.GitlabCIVariables
+	jobConfig  *config.JobConfig
+	jiraClient jira_wick.JiraWickClient
 }
 
-// jiraCloseReleaseRequest структура для отправки API запроса к сервису JiraWick
-type jiraCloseReleaseRequest struct {
-	JiraProjectId        string `json:"jira_project_id"`
-	ReleaseNumber        string `json:"release_number"`
-	JiraIssueComponentID string `json:"jira_issue_component_id"`
-	ProjectPath          string `json:"project_path"`
-	DeployStatus         bool   `json:"deploy_status"`
-	NotifyChannel        string `json:"notify_channel"`
-	TechOwners           string `json:"tech_owners"`
-	IsRelease            bool   `json:"is_release"`
-}
-
-// jiraCloseReleaseResponse структура ответа на запрос создания релиза от JiraWick
-type jiraCloseReleaseResponse struct {
-	Status  bool   `json:"status"`
-	Comment string `json:"comment"`
+// NewCloseJiraReleaseVersionJob — конструктор, возвращающий CloseJiraReleaseVersionJob
+func NewCloseJiraReleaseVersionJob() (IPipelineJob, error) {
+	return &CloseJiraReleaseVersionJob{
+		ciVars:     config.GetGitlabCIVariables(),
+		jobConfig:  config.GetJobConfig(),
+		jiraClient: jira_wick.NewJiraWickClient(config.GetJobConfig().JiraWickService),
+	}, nil
 }
 
 // Run - запуск джоба
@@ -43,13 +36,14 @@ func (j *CloseJiraReleaseVersionJob) Run() {
 		os.Exit(1)
 	}
 
-	response := j.sendRequest(reqBody)
-
-	slog.Info("Jira response received", "comment", response.Comment)
+	_, err = j.jiraClient.CloseRelease(reqBody)
+	if err != nil {
+		os.Exit(1)
+	}
 }
 
 // buildRequestPayload формирует payload для запроса на создание релиза в жире
-func (j *CloseJiraReleaseVersionJob) buildRequestPayload() (*jiraCloseReleaseRequest, error) {
+func (j *CloseJiraReleaseVersionJob) buildRequestPayload() (*jira_wick.CloseReleaseRequest, error) {
 	isRelease, err := j.isReleaseVersion()
 	if err != nil {
 		return nil, err
@@ -60,7 +54,7 @@ func (j *CloseJiraReleaseVersionJob) buildRequestPayload() (*jiraCloseReleaseReq
 		return nil, err
 	}
 
-	return &jiraCloseReleaseRequest{
+	return &jira_wick.CloseReleaseRequest{
 		JiraProjectId:        j.jobConfig.JiraProjectID,
 		ReleaseNumber:        j.ciVars.CommitRefName,
 		JiraIssueComponentID: j.jobConfig.JiraIssueComponentID,
@@ -82,43 +76,11 @@ func (j *CloseJiraReleaseVersionJob) isReleaseVersion() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("invalid version format: %s error: %w", j.ciVars.CommitRefName, err)
 	}
+
 	return v.Patch() == 0, nil
 }
 
 // getDeployStatus статус деплоя на прод
 func (j *CloseJiraReleaseVersionJob) getDeployStatus() (bool, error) {
 	return true, nil
-}
-
-// sendRequest отправка запроса на создание релиза в жире
-func (j *CloseJiraReleaseVersionJob) sendRequest(request *jiraCloseReleaseRequest) *jiraCloseReleaseResponse {
-
-	client := resty.New()
-	var response jiraCloseReleaseResponse
-	_, err := client.R().
-		SetHeader("Content-Type", "application/json").
-		SetBody(request).
-		SetResult(&response).
-		Post(j.jobConfig.JiraWickService)
-
-	if err != nil {
-		slog.Error("Не удалось подключиться к сервису JiraWick", "error", err)
-		os.Exit(1)
-	}
-
-	if !response.Status {
-		slog.Error("Ошибка JiraWick", "comment", response.Comment)
-		os.Exit(1)
-	}
-
-	slog.Info("Ответ JiraWick", "comment", response.Comment)
-	return &response
-}
-
-// NewCloseJiraReleaseVersionJob — конструктор, возвращающий CloseJiraReleaseVersionJob
-func NewCloseJiraReleaseVersionJob() (IPipelineJob, error) {
-	return &CloseJiraReleaseVersionJob{
-		ciVars:    config.GetGitlabCIVariables(),
-		jobConfig: config.GetJobConfig(),
-	}, nil
 }
