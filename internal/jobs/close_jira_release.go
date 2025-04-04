@@ -1,13 +1,10 @@
 package jobs
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"github.com/Masterminds/semver/v3"
-	"io"
+	"github.com/go-resty/resty/v2"
 	"log/slog"
-	"net/http"
 	"os"
 	"pipe-cli/internal/config"
 )
@@ -46,22 +43,13 @@ func (j *CloseJiraReleaseVersionJob) Run() {
 		os.Exit(1)
 	}
 
-	response, err := j.sendRequest(reqBody)
-	if err != nil {
-		slog.Error("Failed to send request", "error", err)
-		os.Exit(1)
-	}
-
-	if !response.Status {
-		slog.Error("Jira responded with error", "comment", response.Comment)
-		os.Exit(1)
-	}
+	response := j.sendRequest(reqBody)
 
 	slog.Info("Jira response received", "comment", response.Comment)
 }
 
 // buildRequestPayload формирует payload для запроса на создание релиза в жире
-func (j *CloseJiraReleaseVersionJob) buildRequestPayload() ([]byte, error) {
+func (j *CloseJiraReleaseVersionJob) buildRequestPayload() (*jiraCloseReleaseRequest, error) {
 	isRelease, err := j.isReleaseVersion()
 	if err != nil {
 		return nil, err
@@ -72,7 +60,7 @@ func (j *CloseJiraReleaseVersionJob) buildRequestPayload() ([]byte, error) {
 		return nil, err
 	}
 
-	data := jiraCloseReleaseRequest{
+	return &jiraCloseReleaseRequest{
 		JiraProjectId:        j.jobConfig.JiraProjectID,
 		ReleaseNumber:        j.ciVars.CommitRefName,
 		JiraIssueComponentID: j.jobConfig.JiraIssueComponentID,
@@ -81,8 +69,7 @@ func (j *CloseJiraReleaseVersionJob) buildRequestPayload() ([]byte, error) {
 		NotifyChannel:        j.jobConfig.JiraNotifyChannel,
 		TechOwners:           j.jobConfig.TechOwners,
 		IsRelease:            isRelease,
-	}
-	return json.Marshal(data)
+	}, nil
 }
 
 // isReleaseVersion признак нового релиза
@@ -104,25 +91,28 @@ func (j *CloseJiraReleaseVersionJob) getDeployStatus() (bool, error) {
 }
 
 // sendRequest отправка запроса на создание релиза в жире
-func (j *CloseJiraReleaseVersionJob) sendRequest(data []byte) (*jiraCloseReleaseResponse, error) {
-	resp, err := http.Post(j.jobConfig.JiraWickService, "application/json", bytes.NewReader(data))
-	if err != nil {
-		return nil, fmt.Errorf("FLY_ERROR-01-14.04.01: Не удалось подключиться к сервису JiraWick. %w", err)
-	}
+func (j *CloseJiraReleaseVersionJob) sendRequest(request *jiraCloseReleaseRequest) *jiraCloseReleaseResponse {
 
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
-
+	client := resty.New()
 	var response jiraCloseReleaseResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		slog.Info("Raw response body", "body", string(body))
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	_, err := client.R().
+		SetHeader("Content-Type", "application/json").
+		SetBody(request).
+		SetResult(&response).
+		Post(j.jobConfig.JiraWickService)
+
+	if err != nil {
+		slog.Error("Не удалось подключиться к сервису JiraWick", "error", err)
+		os.Exit(1)
 	}
 
-	return &response, nil
+	if !response.Status {
+		slog.Error("Ошибка JiraWick", "comment", response.Comment)
+		os.Exit(1)
+	}
+
+	slog.Info("Ответ JiraWick", "comment", response.Comment)
+	return &response
 }
 
 // NewCloseJiraReleaseVersionJob — конструктор, возвращающий CloseJiraReleaseVersionJob
