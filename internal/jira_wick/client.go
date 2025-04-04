@@ -5,6 +5,11 @@ import (
 	"log/slog"
 )
 
+// JiraWickClient интерфейс для restyClient
+type JiraWickClient interface {
+	CloseRelease(req *CloseReleaseRequest) (*CloseReleaseResponse, error)
+}
+
 // restyClient структура для работы с сервисом JiraWick
 type restyClient struct {
 	client  *resty.Client
