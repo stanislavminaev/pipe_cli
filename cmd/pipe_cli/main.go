@@ -2,7 +2,7 @@ package main
 
 import (
 	"os"
-	"pipe-cli/config"
+	"pipe-cli/internal/config"
 	"pipe-cli/internal/jobs"
 )
 
